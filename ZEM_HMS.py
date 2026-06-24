@@ -1,15 +1,31 @@
+"""
+ZEM_HMS.py — ZEM Hospital Management System
+============================================
+Entry point for the patient-facing kiosk.
+Database: Supabase (cloud PostgreSQL) via supabase_db.py
+"""
+
 from customtkinter import *
 from PIL import Image
-from tkinter import messagebox, ttk, VERTICAL 
+from tkinter import messagebox, ttk, VERTICAL
 import patient_db as ad
 
-# Define a Node for the double circular linked list
+# ── Module-level token queues (BUG-018/019 FIX: not re-created per screen) ───
+emergency_token_queue = []
+opd_token_queue = []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Navigation — Double Circular Linked List (BUG-010 FIX: clean API)
+# ═════════════════════════════════════════════════════════════════════════════
+
 class Node:
     def __init__(self, data, screen_func):
         self.data = data
         self.screen_func = screen_func
         self.next = None
         self.prev = None
+
 
 class DoubleCircularLinkedList:
     def __init__(self):
@@ -29,47 +45,72 @@ class DoubleCircularLinkedList:
             self.head.prev = new_node
 
     def go_forward(self):
+        """BUG-010 FIX: Pure mutation — updates head AND returns it."""
         if self.head:
             self.head = self.head.next
         return self.head
 
     def go_previous(self):
-        if self.head and self.head.prev:
+        """BUG-010 FIX: Pure mutation — updates head AND returns it."""
+        if self.head:
             self.head = self.head.prev
         return self.head
 
+    def seek(self, name: str, max_steps: int = 20) -> bool:
+        """BUG-013 FIX: Safely navigate to a named node with a step limit."""
+        for _ in range(max_steps):
+            if self.head and self.head.data == name:
+                return True
+            self.go_previous()
+        return False
 
-# Navigation list
+
 navigation_list = DoubleCircularLinkedList()
 
-# User screen
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Shared Validation Helper
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _validate_patient_fields(cnic, name, phone, age, city, gender):
+    """
+    BUG-011 / BUG-012 FIX: Centralised patient field validation.
+    Returns (True, '') on success or (False, error_message) on failure.
+    """
+    if not all([cnic, name, phone, age, city]) or gender == 'Please Select':
+        return False, 'All fields are required.'
+    if not ad.validate_cnic(cnic):
+        return False, 'Invalid CNIC format.\nExpected: XXXXX-XXXXXXX-X (13 digits).'
+    if not ad.validate_phone(phone):
+        return False, 'Invalid phone number.\nExpected: 03XXXXXXXXX or +92XXXXXXXXXX.'
+    if not ad.validate_age(age):
+        return False, 'Invalid age. Must be a number between 1 and 150.'
+    return True, ''
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Screen 1 — User / Home Screen
+# ═════════════════════════════════════════════════════════════════════════════
+
 def user_screen():
     global root
     root = CTk()
     root.geometry("950x450")
     root.resizable(False, False)
-    root.title("Login Page")
+    root.title("ZEM Hospital — Home")
 
-    # Background image
     image = CTkImage(Image.open('zem.png'), size=(950, 450))
-    imageLabel = CTkLabel(root, image=image, text="")
-    imageLabel.place(x=0, y=0)
-    """
-    # Heading label
-    headinglabel = CTkLabel(root, text="Welcome to ZEM Hospital",
-                            fg_color="#097999",
-                            text_color="white",
-                            font=("Goudy Old Style", 30, "bold"))
-    headinglabel.place(x=30, y=150)
-    """
+    CTkLabel(root, image=image, text="").place(x=0, y=0)
+
     def go_to_patient_screen():
         root.destroy()
-        navigation_list.head = navigation_list.go_forward()
+        navigation_list.go_forward()
         navigation_list.head.screen_func()
 
     def call_doc():
         root.destroy()
         import admin_hms
+        admin_hms.run()
 
     def call_visitor():
         root.destroy()
@@ -79,414 +120,346 @@ def user_screen():
         root.destroy()
         suggestion_screen()
 
-    # Buttons
-    CTkButton(root, text='Patient', cursor='hand2', font=('ariel', 20, 'bold'), width=180, command=go_to_patient_screen).place(x=120, y=180)
-    CTkButton(root, text='Visitor', cursor='hand2', font=('ariel', 20, 'bold'), width=180, command=call_visitor).place(x=120, y=220)
-    CTkButton(root, text='Add Suggestion', cursor='hand2', font=('ariel', 20, 'bold'), width=180,command=call_sug).place(x=120, y=260)
-    CTkButton(root, text='Doctor', cursor='hand2', font=('ariel', 20, 'bold'), width=180,command=call_doc).place(x=120, y=300)
+    btn_cfg = dict(cursor='hand2', font=('Arial', 20, 'bold'), width=180)
+    CTkButton(root, text='Patient',        command=go_to_patient_screen, **btn_cfg).place(x=120, y=180)
+    CTkButton(root, text='Visitor',        command=call_visitor,         **btn_cfg).place(x=120, y=220)
+    CTkButton(root, text='Add Suggestion', command=call_sug,             **btn_cfg).place(x=120, y=260)
+    CTkButton(root, text='Doctor',         command=call_doc,             **btn_cfg).place(x=120, y=300)
 
     root.mainloop()
 
-# Patient screen
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Screen 2 — Patient Registration Screen
+# ═════════════════════════════════════════════════════════════════════════════
+
 def patient_screen():
     global window
     window = CTk()
     window.geometry("930x580")
     window.resizable(False, False)
-    window.title("Hospital Management System")
+    window.title("ZEM Hospital — Patient Registration")
     window.configure(fg_color='black')
 
-    # Background image
-    image = CTkImage(Image.open('hms.jpg'), size=(950, 150))
-    imageLabel = CTkLabel(window, image=image, text="")
-    imageLabel.grid(row=0, column=0, sticky='n', pady=10)
+    CTkLabel(window, image=CTkImage(Image.open('hms.jpg'), size=(950, 150)), text="").grid(row=0, column=0, sticky='n', pady=10)
 
-    # Functions
-    def go_to_opd_screen():
-        medicine_Box = 'Please Select'
-        if any(entry.get() == '' for entry in [cnicEntry, phoneEntry, nameEntry, ageEntry, cityEntry]) or gender_Box.get() == 'Please Select':
-            messagebox.showerror('Error', 'All fields are required')
-        elif gender_Box.get() == 'Please Select':
-            messagebox.showerror('Error', 'Please select gender and medicine')
-        else:
-            window.destroy()
-            navigation_list.head = navigation_list.go_forward()
-            navigation_list.head.screen_func()
+    # ── inner helpers ─────────────────────────────────────────────────────────
+
+    def _get_fields():
+        return (cnicEntry.get().strip(), nameEntry.get().strip(),
+                phoneEntry.get().strip(), ageEntry.get().strip(),
+                cityEntry.get().strip(), gender_Box.get(), medicine_Box.get())
+
+    def clear_data():
+        for e in [cnicEntry, nameEntry, phoneEntry, ageEntry, cityEntry]:
+            e.delete(0, END)
+        gender_Box.set('Please Select')
+        medicine_Box.set('Please Select')
 
     def go_back():
         window.destroy()
-        user_screen()
+        # BUG-027 FIX: use navigation list to go back properly
+        navigation_list.go_previous()
+        navigation_list.head.screen_func()
 
-    def clear_data():
-        cnicEntry.delete(0, END)
-        nameEntry.delete(0, END)
-        phoneEntry.delete(0, END)
-        ageEntry.delete(0, END)
-        cityEntry.delete(0, END)
-        gender_Box.set('Please Select')
+    def go_to_opd_screen():
+        """QA-22 FIX: saves patient to DB before navigating to OPD."""
+        cnic, name, phone, age, city, gender, medicine = _get_fields()
+        ok, err = _validate_patient_fields(cnic, name, phone, age, city, gender)
+        if not ok:
+            messagebox.showerror('Validation Error', err)
+            return
+        # Save patient first so the record exists in Supabase
+        med = medicine if medicine != 'Please Select' else 'N/A'
+        ad.insert(cnic, name, phone, age, city, gender, med)
+        window.destroy()
+        navigation_list.go_forward()
+        navigation_list.head.screen_func()
 
     def add_pat():
-        medicine_Box = 'Please Select'
-        if any(entry.get() == '' for entry in [cnicEntry, phoneEntry, nameEntry, ageEntry, cityEntry]) or gender_Box.get() == 'Please Select':
-            messagebox.showerror('Error', 'All fields are required')
-        elif gender_Box.get() == 'Please Select':
-            messagebox.showerror('Error', 'Please select gender and medicine')
-        else:
-            ad.insert(cnicEntry.get(), nameEntry.get(), phoneEntry.get(), ageEntry.get(), cityEntry.get(), gender_Box.get(), medicine_Box)
-            generate_emergency_token()
-            clear_data()
-            go_back()
+        """Generate emergency token — saves patient and assigns a token."""
+        cnic, name, phone, age, city, gender, medicine = _get_fields()
+        if medicine == 'Please Select':
+            messagebox.showerror('Validation Error', 'Please select a medicine.')
+            return
+        ok, err = _validate_patient_fields(cnic, name, phone, age, city, gender)
+        if not ok:
+            messagebox.showerror('Validation Error', err)
+            return
+        # QA-21 FIX: use the returned ID directly — no CNIC lookup race condition
+        new_id = ad.insert(cnic, name, phone, age, city, gender, medicine)
+        if new_id:
+            _generate_emergency_token(new_id, cnic, name, phone, age, city, gender)
+        clear_data()
+        go_back()
 
+    def _generate_emergency_token(patient_id, cnic, name, phone, age, city, gender):
+        """QA-21 FIX: patient_id passed directly from insert() RETURNING id."""
+        token_number = len(emergency_token_queue) + 1
+        room_number  = 318
+        doctor       = "Dr. Ehtisham Ali"
 
-    # Queue to track emergency tokens
-    emergency_token_queue = []
-    def generate_emergency_token():
-        try:
-            # Fetch patient data using CNIC
-            cnic = cnicEntry.get()  
-            patient_data = ad.fetch_patient_by_cnic(cnic)  # Fetch patient record by CNIC
-            if not patient_data:
-                messagebox.showerror("Error", "No patient found with the provided CNIC!")
-                return
+        token = {
+            "Token Number": token_number,
+            "Patient ID":   patient_id,
+            "Name":         name,
+            "CNIC":         cnic,
+            "Phone":        phone,
+            "Age":          age,
+            "City":         city,
+            "Gender":       gender,
+            "Doctor":       doctor,
+            "Room":         room_number,
+        }
+        emergency_token_queue.append(token)
+        ad.insert_token(cnic, patient_id)
 
-            # Extract patient details
-            patient_id, cnic, name, phone, age, city, gender, medicine = patient_data
+        messagebox.showinfo("Emergency Token",
+            f"Token Number : {token_number}\n"
+            f"Patient ID   : {patient_id}\n"
+            f"Name         : {name}\n"
+            f"CNIC         : {cnic}\n"
+            f"Phone        : {phone}\n"
+            f"Age          : {age}\n"
+            f"City         : {city}\n"
+            f"Gender       : {gender}\n"
+            f"Doctor       : {doctor}\n"
+            f"Room         : {room_number}"
+        )
 
-            # Generate unique token number
-            token_number = len(emergency_token_queue) + 1
+    # ── layout ────────────────────────────────────────────────────────────────
 
-            # Assign room number and doctor
-            room_number = 318  # Example room number
-            doctor = "Doctor Ehtisham Ali"  # Example doctor
-
-            # Create token details
-            token_details = {
-                "Token Number": token_number,
-                "Patient ID": patient_id,
-                "Name": name,
-                "CNIC": cnic,
-                "Phone": phone,
-                "Age": age,
-                "City": city,
-                "Gender": gender,
-                "Doctor": doctor,
-                "Room": room_number,
-            }
-
-            # Add to the token queue
-            emergency_token_queue.append(token_details)
-
-            # Format the token message
-            token_message = (
-                f"Token Number: {token_number}\n"
-                f"Patient ID: {patient_id}\n"
-                f"Name: {name}\n"
-                f"CNIC: {cnic}\n"
-                f"Phone: {phone}\n"
-                f"Age: {age}\n"
-                f"City: {city}\n"
-                f"Gender: {gender}\n"
-                f"Doctor: {doctor}\n"
-                f"Room: {room_number}"
-            )
-
-            # Display token information
-            messagebox.showinfo("Emergency Token", token_message)
-
-        except Exception as e:
-            # General error handling
-            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
-
-    # Left Frame
     leftFrame = CTkFrame(window, fg_color="black")
     leftFrame.grid(row=1, column=0, padx=20, pady=20, sticky='n')
-    leftFrame.grid_columnconfigure((0, 1), weight=1)
+    leftFrame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
-    # CNIC
-    cnicLabel = CTkLabel(leftFrame, text='Enter your Cnic:', font=('ariel', 18, 'bold'), text_color="white")
-    cnicLabel.grid(row=0, column=0, padx=10, pady=10, sticky='e')
+    lbl = dict(font=('Arial', 18, 'bold'), text_color="white")
+    ent = dict(font=('Arial', 18, 'bold'), text_color="white", width=180)
 
-    cnicEntry = CTkEntry(leftFrame, font=('ariel', 18, 'bold'), text_color="white", width=180)
-    cnicEntry.grid(row=0, column=1, padx=10, pady=10, sticky='w')
+    CTkLabel(leftFrame, text='CNIC:',         **lbl).grid(row=0, column=0, padx=10, pady=10, sticky='e')
+    cnicEntry = CTkEntry(leftFrame,  **ent); cnicEntry.grid(row=0, column=1, padx=10, pady=10, sticky='w')
 
-    # Patient Name
-    nameLabel = CTkLabel(leftFrame, text='Patient name:', font=('ariel', 18, 'bold'), text_color="white")
-    nameLabel.grid(row=1, column=0, padx=10, pady=10, sticky='e')
+    CTkLabel(leftFrame, text='Patient Name:', **lbl).grid(row=1, column=0, padx=10, pady=10, sticky='e')
+    nameEntry = CTkEntry(leftFrame,  **ent); nameEntry.grid(row=1, column=1, padx=10, pady=10, sticky='w')
 
-    nameEntry = CTkEntry(leftFrame, font=('ariel', 18, 'bold'), text_color="white", width=180)
-    nameEntry.grid(row=1, column=1, padx=10, pady=10, sticky='w')
+    CTkLabel(leftFrame, text='Phone Number:', **lbl).grid(row=2, column=0, padx=10, pady=10, sticky='e')
+    phoneEntry = CTkEntry(leftFrame, **ent); phoneEntry.grid(row=2, column=1, padx=10, pady=10, sticky='w')
 
-    # Phone Number
-    phoneLabel = CTkLabel(leftFrame, text='Phone Number:', font=('ariel', 18, 'bold'), text_color="white")
-    phoneLabel.grid(row=2, column=0, padx=10, pady=10, sticky='e')
+    CTkLabel(leftFrame, text='Age:',          **lbl).grid(row=0, column=2, padx=10, pady=10, sticky='e')
+    ageEntry = CTkEntry(leftFrame,   **ent); ageEntry.grid(row=0, column=3, padx=10, pady=10, sticky='w')
 
-    phoneEntry = CTkEntry(leftFrame, font=('ariel', 18, 'bold'), text_color="white", width=180)
-    phoneEntry.grid(row=2, column=1, padx=10, pady=10, sticky='w')
-
-    # Age
-    ageLabel = CTkLabel(leftFrame, text='Age:', font=('ariel', 18, 'bold'), text_color="white")
-    ageLabel.grid(row=0, column=2, padx=10, pady=10, sticky='e')
-
-    ageEntry = CTkEntry(leftFrame, font=('ariel', 18, 'bold'), text_color="white", width=180)
-    ageEntry.grid(row=0, column=3, padx=10, pady=10, sticky='w')
-
-    # Gender
-    genderLabel = CTkLabel(leftFrame, text='Gender:', font=('ariel', 18, 'bold'), text_color="white")
-    genderLabel.grid(row=1, column=2, padx=10, pady=10, sticky='e')
-
-    genders = ['Male', 'Female', 'Others']
-    gender_Box = CTkComboBox(leftFrame, values=genders)
+    CTkLabel(leftFrame, text='Gender:',       **lbl).grid(row=1, column=2, padx=10, pady=10, sticky='e')
+    gender_Box = CTkComboBox(leftFrame, values=['Male', 'Female', 'Others'], font=('Arial', 16, 'bold'), width=180)
     gender_Box.grid(row=1, column=3, padx=10, pady=10, sticky='w')
     gender_Box.set('Please Select')
 
-    # City
-    cityLabel = CTkLabel(leftFrame, text='City:', font=('ariel', 18, 'bold'), text_color="white")
-    cityLabel.grid(row=2, column=2, padx=10, pady=10, sticky='e')
+    CTkLabel(leftFrame, text='City:',         **lbl).grid(row=2, column=2, padx=10, pady=10, sticky='e')
+    cityEntry = CTkEntry(leftFrame,  **ent); cityEntry.grid(row=2, column=3, padx=10, pady=10, sticky='w')
 
-    cityEntry = CTkEntry(leftFrame, font=('ariel', 18, 'bold'), text_color="white", width=180)
-    cityEntry.grid(row=2, column=3, padx=10, pady=10, sticky='w')
+    # BUG-002 FIX: medicine_Box is now a real widget on this screen
+    CTkLabel(leftFrame, text='Medicine:',     **lbl).grid(row=3, column=0, padx=10, pady=10, sticky='e')
+    medicine_Box = CTkComboBox(leftFrame, values=[
+        'Paracetamol', 'Amoxicillin', 'Ibuprofen', 'Metformin',
+        'Omeprazole', 'Atorvastatin', 'Amlodipine', 'Other'
+    ], font=('Arial', 16, 'bold'), width=180)
+    medicine_Box.grid(row=3, column=1, padx=10, pady=10, sticky='w')
+    medicine_Box.set('Please Select')
 
-    # Buttons
     buttonFrame = CTkFrame(window, fg_color="black")
     buttonFrame.grid(row=2, column=0, pady=20, sticky='n')
 
-    CTkButton(buttonFrame, text='Generate Token for Emergency', command=add_pat).grid(row=0, column=0, padx=10, pady=10)
-    CTkButton(buttonFrame, text='Continue to OPD', command=go_to_opd_screen).grid(row=1, column=0, padx=10, pady=10)
-    CTkButton(buttonFrame, text='Go Back', command=go_back).grid(row=2, column=0, padx=10, pady=10)
+    CTkButton(buttonFrame, text='Generate Emergency Token', command=add_pat).grid(row=0, column=0, padx=10, pady=10)
+    CTkButton(buttonFrame, text='Continue to OPD',          command=go_to_opd_screen).grid(row=1, column=0, padx=10, pady=10)
+    CTkButton(buttonFrame, text='Go Back',                  command=go_back).grid(row=2, column=0, padx=10, pady=10)
 
     window.mainloop()
 
 
-# OPD screen
+# ═════════════════════════════════════════════════════════════════════════════
+#  Screen 3 — OPD Selection Screen
+# ═════════════════════════════════════════════════════════════════════════════
+
 def opd_screen():
     global window
     window = CTk()
     window.geometry("950x580")
     window.resizable(False, False)
-    window.title("Hospital Management System")
+    window.title("ZEM Hospital — OPD Selection")
     window.configure(fg_color='black')
 
-    # Load and configure the background image
-    image = CTkImage(Image.open('hms.jpg'), size=(950, 150))
-    imageLabel = CTkLabel(window, image=image, text="")
-    imageLabel.grid(row=0, column=0, columnspan=2)
+    CTkLabel(window, image=CTkImage(Image.open('hms.jpg'), size=(950, 150)), text="").grid(row=0, column=0, columnspan=2)
+    CTkLabel(window, text="Please select the desired OPD",
+             font=("Arial", 30, "bold"), text_color="white").grid(row=1, column=0, columnspan=2, pady=10)
 
-    # Add title
-    titleLabel = CTkLabel(
-        window,
-        text="Please select the desired OPD",
-        font=("Arial", 30, "bold"),
-        text_color="white"
-    )
-    titleLabel.grid(row=1, column=0, columnspan=2, pady=10)
-
-    # OPD Services List
     opd_services = [
-        ("Consultation", "Dr. Ehtisham"),
-        ("Pediatrics", "Dr. Ehtisham"),
-        ("Surgical", "Dr. Mohsin"),
-        ("Psychiatry", "Dr. Zeeshan"),
-        ("Orthopedic", "Dr. Ehtisham"),
-        ("Cardiology", "Dr. Mohsin"),
-        ("Neurology", "Dr. Mohsin"),
-        ("Immunizations", "Dr. Zeeshan"),
-        ("Dermatology", "Dr. Ehtisham"),
-        ("Pulmonology", "Dr. Mohsin"),
-        ("Physio-Therapy", "Dr. Zeeshan"),
-        ("ENT", "Dr. Zeeshan")
+        ("Consultation",  "Dr. Ehtisham"), ("Pediatrics",     "Dr. Ehtisham"),
+        ("Surgical",      "Dr. Mohsin"),   ("Psychiatry",     "Dr. Zeeshan"),
+        ("Orthopedic",    "Dr. Ehtisham"), ("Cardiology",     "Dr. Mohsin"),
+        ("Neurology",     "Dr. Mohsin"),   ("Immunizations",  "Dr. Zeeshan"),
+        ("Dermatology",   "Dr. Ehtisham"), ("Pulmonology",    "Dr. Mohsin"),
+        ("Physio-Therapy","Dr. Zeeshan"),  ("ENT",            "Dr. Zeeshan"),
     ]
 
-    # Queue to track OPD tokens
-    opd_token_queue = []
-
-    # Function to generate a token
     def generate_token(service, doctor):
-        # Token details
+        # BUG-018 FIX: use module-level queue — number never resets
         token_number = len(opd_token_queue) + 1
-        room_number = 101 + len(opd_token_queue) % 10  # Example room assignment
-        token_details = {
-            "Token": token_number,
-            "Service": service,
-            "Doctor": doctor,
-            "Room": room_number
-        }
-        opd_token_queue.append(token_details)
-
-        # Display token information
-        token_message = (f"Token Number: {token_number}\n"
-                         f"Service: {service}\n"
-                         f"Doctor: {doctor}\n"
-                         f"Room: {room_number}")
-        messagebox.showinfo("OPD Token", token_message)
+        room_number  = 101 + (len(opd_token_queue) % 10)
+        opd_token_queue.append({
+            "Token": token_number, "Service": service,
+            "Doctor": doctor, "Room": room_number
+        })
+        messagebox.showinfo("OPD Token",
+            f"Token Number : {token_number}\n"
+            f"Service      : {service}\n"
+            f"Doctor       : {doctor}\n"
+            f"Room         : {room_number}"
+        )
         window.destroy()
         user_screen()
 
-    # Create OPD Buttons
     buttonFrame = CTkFrame(window)
     buttonFrame.grid(row=2, column=0, columnspan=2, pady=20)
 
     for i, (service, doctor) in enumerate(opd_services):
-        button = CTkButton(
-            buttonFrame,
-            text=f"{service}",
-            font=('Arial', 25, 'bold'),
-            width=220,
-            corner_radius=10,
-            command=lambda s=service, d=doctor: generate_token(s, d)
-        )
-        button.grid(row=i // 3, column=i % 3, padx=10, pady=10)
+        CTkButton(buttonFrame, text=service, font=('Arial', 20, 'bold'),
+                  width=220, corner_radius=10,
+                  command=lambda s=service, d=doctor: generate_token(s, d)
+                  ).grid(row=i // 3, column=i % 3, padx=10, pady=10)
 
     def previous():
         window.destroy()
-        navigation_list.head = navigation_list.go_previous()
+        navigation_list.go_previous()
         navigation_list.head.screen_func()
 
-    previousButton = CTkButton(buttonFrame, text='Go Back',
-                               cursor='hand2',
-                               command=previous,
-                               font=('ariel', 30, 'bold'),
-                               width=220,
-                               corner_radius=15)
-    previousButton.grid(row=5, column=1, padx=10, pady=10)
+    CTkButton(buttonFrame, text='Go Back', cursor='hand2', command=previous,
+              font=('Arial', 20, 'bold'), width=220, corner_radius=15
+              ).grid(row=4, column=1, padx=10, pady=10)
 
     window.mainloop()
 
-# Visitor screen
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Screen 4 — Visitor Screen
+# ═════════════════════════════════════════════════════════════════════════════
+
 def visitor_screen():
     global window
     window = CTk()
     window.geometry("950x450")
     window.resizable(False, False)
-    window.title("Visitor Page")
+    window.title("ZEM Hospital — Visitor Information")
 
-    # Heading
     CTkLabel(window, text="Visitor Information",
-             font=("Arial", 30, "bold"),
-             text_color="white").pack(pady=20)
+             font=("Arial", 30, "bold"), text_color="white").pack(pady=20)
 
-    # Visitor Details Frame
     visitor_frame = CTkFrame(window)
     visitor_frame.pack(pady=10, padx=20)
 
-    CTkLabel(visitor_frame, text="Visitor Name:", font=('Arial', 18), text_color="white").grid(row=0, column=0, pady=10, padx=10)
-    CTkEntry(visitor_frame).grid(row=0, column=1, pady=10, padx=10)
+    lbl = dict(font=('Arial', 18), text_color="white")
 
-    CTkLabel(visitor_frame, text="CNIC:", font=('Arial', 18), text_color="white").grid(row=1, column=0, pady=10, padx=10)
-    CTkEntry(visitor_frame).grid(row=1, column=1, pady=10, padx=10)
+    CTkLabel(visitor_frame, text="Visitor Name:",    **lbl).grid(row=0, column=0, pady=10, padx=10, sticky='e')
+    name_entry    = CTkEntry(visitor_frame, width=220); name_entry.grid(row=0, column=1, pady=10, padx=10)
 
-    CTkLabel(visitor_frame, text="Contact Number:", font=('Arial', 18), text_color="white").grid(row=2, column=0, pady=10, padx=10)
-    CTkEntry(visitor_frame).grid(row=2, column=1, pady=10, padx=10)
+    CTkLabel(visitor_frame, text="CNIC:",            **lbl).grid(row=1, column=0, pady=10, padx=10, sticky='e')
+    cnic_entry    = CTkEntry(visitor_frame, width=220); cnic_entry.grid(row=1, column=1, pady=10, padx=10)
 
-    CTkLabel(visitor_frame, text="Patient ID:", font=('Arial', 18), text_color="white").grid(row=2, column=0, pady=10, padx=10)
-    CTkEntry(visitor_frame).grid(row=3, column=1, pady=10, padx=10)
+    CTkLabel(visitor_frame, text="Contact Number:",  **lbl).grid(row=2, column=0, pady=10, padx=10, sticky='e')
+    contact_entry = CTkEntry(visitor_frame, width=220); contact_entry.grid(row=2, column=1, pady=10, padx=10)
 
+    # BUG-008 FIX: "Patient ID" was at row=2 (overwriting "Contact Number" label).
+    # Correctly placed at row=3 with matching label.
+    CTkLabel(visitor_frame, text="Patient ID:",      **lbl).grid(row=3, column=0, pady=10, padx=10, sticky='e')
+    pid_entry     = CTkEntry(visitor_frame, width=220); pid_entry.grid(row=3, column=1, pady=10, padx=10)
+
+    # BUG-021 FIX: Submit button now actually saves visitor data to DB
+    def submit_visitor():
+        v_name   = name_entry.get().strip()
+        v_cnic   = cnic_entry.get().strip()
+        v_contact= contact_entry.get().strip()
+        v_pid    = pid_entry.get().strip()
+
+        if not v_name or not v_cnic:
+            messagebox.showerror("Error", "Visitor Name and CNIC are required.")
+            return
+        ad.insert_visitor(v_name, v_cnic, v_contact, v_pid)
+        messagebox.showinfo("Submitted", "Visitor details recorded successfully.")
+        for e in [name_entry, cnic_entry, contact_entry, pid_entry]:
+            e.delete(0, END)
 
     def back_to_user_screen():
         window.destroy()
-        # Ensure navigation list goes back to the User Screen (main menu)
-        while navigation_list.head.data != "User Screen":
-            navigation_list.head = navigation_list.go_previous()
-        navigation_list.head.screen_func()
+        # BUG-013 FIX: safe seek with step limit
+        if navigation_list.seek("User Screen"):
+            navigation_list.head.screen_func()
+        else:
+            user_screen()
 
-    # Buttons
-    CTkButton(window, text="Submit", command=lambda: messagebox.showinfo("Submitted", "Visitor details recorded successfully")).pack(pady=10)
-    CTkButton(window, text="Back", command=back_to_user_screen).pack(pady=10)
+    CTkButton(window, text="Submit", command=submit_visitor).pack(pady=10)
+    CTkButton(window, text="Back",   command=back_to_user_screen).pack(pady=5)
 
     window.mainloop()
 
-# Suggestion Screen
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Screen 5 — Suggestion Screen
+# ═════════════════════════════════════════════════════════════════════════════
+
 def suggestion_screen():
     global window
     window = CTk()
-    window.geometry("950x450")
+    window.geometry("950x480")
     window.resizable(False, False)
-    window.title("Suggestion Page")
+    window.title("ZEM Hospital — Suggestions")
 
-    CTkLabel(window, text="Add Suggestion",
-             font=("Arial", 30, "bold"),
-             text_color="white").pack(pady=20)
+    CTkLabel(window, text="Add a Suggestion",
+             font=("Arial", 30, "bold"), text_color="white").pack(pady=20)
 
     suggestion_frame = CTkFrame(window)
     suggestion_frame.pack(pady=10, padx=20)
 
-    suggestion_label = CTkLabel(suggestion_frame, text="Your Suggestion:", font=('Arial', 18), text_color="white")
-    suggestion_label.grid(row=0, column=0, pady=10, padx=10)
-
-    suggestion_entry = CTkEntry(suggestion_frame, width=300)  # Suggestion entry field
+    CTkLabel(suggestion_frame, text="Your Suggestion:",
+             font=('Arial', 18), text_color="white").grid(row=0, column=0, pady=10, padx=10)
+    suggestion_entry = CTkEntry(suggestion_frame, width=400)
     suggestion_entry.grid(row=0, column=1, pady=10, padx=10)
 
+    # BUG-021 FIX: saves suggestion to DB
     def submit_suggestion():
-        suggestion = suggestion_entry.get().strip()
-        if suggestion:
-            messagebox.showinfo("Submitted", "Thank you for your suggestion!")
-        else:
+        text = suggestion_entry.get().strip()
+        if not text:
             messagebox.showwarning("Warning", "Please enter a suggestion before submitting.")
+            return
+        ad.insert_suggestion(text)
+        messagebox.showinfo("Submitted", "Thank you for your suggestion!")
+        suggestion_entry.delete(0, END)
 
     def back_to_user_screen():
         window.destroy()
-        # Ensure navigation list goes back to the User Screen (main menu)
-        while navigation_list.head.data != "User Screen":
-            navigation_list.head = navigation_list.go_previous()
-        navigation_list.head.screen_func()
+        # BUG-013 FIX: safe seek
+        if navigation_list.seek("User Screen"):
+            navigation_list.head.screen_func()
+        else:
+            user_screen()
 
-    button_frame = CTkFrame(window)
-    button_frame.pack(pady=10)
-
-    # Back Button
-    back_button = CTkButton(button_frame, text='Go Back', 
-                            font=('Arial', 15, 'bold'), 
-                            width=170, 
-                            corner_radius=15,
-                            command=back_to_user_screen)
-    back_button.grid(row=0, column=0, pady=5, padx=5)
-
-    # Submit Button
-    submit_button = CTkButton(button_frame, text='Submit Suggestion', 
-                               font=('Arial', 15, 'bold'), 
-                               width=170, 
-                               corner_radius=15,
-                               command=submit_suggestion)
-    submit_button.grid(row=0, column=1, pady=5, padx=5)
-
-    # Add Treeview table for displaying suggestions
-    tree_frame = CTkFrame(window)
-    tree_frame.pack(pady=20, padx=20)
-
-    tree = ttk.Treeview(tree_frame, height=13)
-    tree.grid(row=0, column=0, columnspan=5)
-
-    tree['columns'] = ['Id', 'Name', 'Phone', 'Age', 'Gender', 'Medicine']
-    tree.heading('Id', text='Id')
-    tree.heading('Name', text='Name')
-    tree.heading('Phone', text='Phone')
-    tree.heading('Age', text='Age')
-    tree.heading('Gender', text='Gender')
-    tree.heading('Medicine', text='Medicine')
-
-    tree.config(show='headings')
-    tree.column('Id', width=80)
-    tree.column('Name', width=150)
-    tree.column('Phone', width=120)
-    tree.column('Age', width=80)
-    tree.column('Gender', width=100) 
-    tree.column('Medicine', width=150)
-
-    style = ttk.Style()
-    style.configure('Treeview.Heading', font=('Arial', 12, 'bold'))
-
-    # Scroll bar
-    scroll_bar = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=tree.yview)
-    scroll_bar.grid(row=0, column=5, sticky='ns')
-    tree.config(yscrollcommand=scroll_bar.set)
+    btn_frame = CTkFrame(window)
+    btn_frame.pack(pady=10)
+    CTkButton(btn_frame, text='Go Back',          font=('Arial', 15, 'bold'), width=170,
+              corner_radius=15, command=back_to_user_screen).grid(row=0, column=0, pady=5, padx=5)
+    CTkButton(btn_frame, text='Submit Suggestion', font=('Arial', 15, 'bold'), width=170,
+              corner_radius=15, command=submit_suggestion).grid(row=0, column=1, pady=5, padx=5)
 
     window.mainloop()
 
-# Populate navigation list
-navigation_list.append("User Screen", user_screen)
-navigation_list.append("Patient Screen", patient_screen)
-navigation_list.append("OPD Screen", opd_screen)
-navigation_list.append("Visitor Screen", visitor_screen)
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Navigation List Setup & App Launch
+# ═════════════════════════════════════════════════════════════════════════════
+
+navigation_list.append("User Screen",       user_screen)
+navigation_list.append("Patient Screen",    patient_screen)
+navigation_list.append("OPD Screen",        opd_screen)
+navigation_list.append("Visitor Screen",    visitor_screen)
 navigation_list.append("Suggestion Screen", suggestion_screen)
 
-# Start application
-navigation_list.head.screen_func()
+# BUG-036 FIX: guard so module imports don't auto-launch the app
+if __name__ == '__main__':
+    navigation_list.head.screen_func()

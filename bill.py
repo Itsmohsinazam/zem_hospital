@@ -1,72 +1,51 @@
+"""
+bill.py — Billing Screen
+=========================
+QA-20 FIX: Hardcoded values removed. Screen is wrapped in a run() function
+           that accepts a patient dictionary from the DB.
+"""
+
 from customtkinter import *
 from PIL import Image
-from tkinter import messagebox
 
-# Initialize the main application window
-root = CTk()
-root.geometry("900x450")  
-root.resizable(False, False)  
-root.title("Login Page")
+def run(patient):
+    """Launch the billing screen for a specific patient."""
+    if not patient:
+        return
 
-# Load and configure the background image
-image = CTkImage(Image.open('bill.png'), size=(950, 450))
-imageLabel = CTkLabel(root, image=image, text="")  # Use text="" to avoid overlap
-imageLabel.place(x=0, y=0)
+    # Unpack patient data
+    # Assuming patient is a tuple/list from fetch_patient_by_id:
+    # (id, cnic, name, phone, age, city, gender, medicine)
+    p_id   = str(patient[0])
+    p_name = patient[2]
+    # For now, hardcode doctor and bill as they aren't stored in pat_data directly
+    p_dr   = "Dr. Ehtisham Ali" 
+    p_bill = "$100"
 
-# id
-patient_id = CTkLabel(root, text="Patient ID:", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_id.place(x=300, y=150)
+    root = CTk()
+    root.geometry("900x450")  
+    root.resizable(False, False)  
+    root.title("ZEM Hospital — Bill")
 
-# id value
-patient_id = CTkLabel(root, text="1001", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_id.place(x=600, y=150)
+    image = CTkImage(Image.open('bill.png'), size=(950, 450))
+    CTkLabel(root, image=image, text="").place(x=0, y=0)
 
-# name
-patient_name = CTkLabel(root, text="Name:", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_name.place(x=300, y=200)
+    lbl_args = dict(fg_color="white", text_color="black", font=("Goudy Old Style", 18, "bold"))
 
-# name value
-patient_id = CTkLabel(root, text="1001", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_id.place(x=600, y=200)
+    CTkLabel(root, text="Patient ID:", **lbl_args).place(x=300, y=150)
+    CTkLabel(root, text=p_id,          **lbl_args).place(x=600, y=150)
 
-# Examained By
-examained_by = CTkLabel(root, text="Examained By:", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-examained_by.place(x=300, y=250)
+    CTkLabel(root, text="Name:",       **lbl_args).place(x=300, y=200)
+    CTkLabel(root, text=p_name,        **lbl_args).place(x=600, y=200)
 
-# dr value
-patient_id = CTkLabel(root, text="1001", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_id.place(x=600, y=250)
+    CTkLabel(root, text="Examined By:",**lbl_args).place(x=300, y=250)
+    CTkLabel(root, text=p_dr,          **lbl_args).place(x=600, y=250)
 
-# Bill
-examained_by = CTkLabel(root, text="Bill:", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-examained_by.place(x=300, y=300)
+    CTkLabel(root, text="Bill:",       **lbl_args).place(x=300, y=300)
+    CTkLabel(root, text=p_bill,        **lbl_args).place(x=600, y=300)
 
-# bill value
-patient_id = CTkLabel(root, text="1001", 
-                        fg_color="white",  # Background color
-                        text_color="black",  # Text color
-                        font=("Goudy Old Style", 18, "bold"))  # Custom font
-patient_id.place(x=600, y=300)
+    root.mainloop()
 
-root.mainloop()
+if __name__ == '__main__':
+    # Test stub
+    run((1001, "12345", "Test Patient", "0300", "25", "City", "Male", "Med"))

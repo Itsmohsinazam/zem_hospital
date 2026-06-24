@@ -1,0 +1,9 @@
+# ZEM Hospital Management System — Dependencies
+
+# Database
+psycopg2-binary       # PostgreSQL driver (Supabase connection)
+python-dotenv         # Load credentials from .env file
+
+# GUI
+customtkinter         # Modern Tkinter UI framework
+Pillow                # Image handling (CTkImage)
